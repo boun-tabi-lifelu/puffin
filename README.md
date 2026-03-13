@@ -1,19 +1,29 @@
-<h1 align="center"> PUFFIN </h1>
-</br>
+<h1 align="center">
+  <img src="puffin.png" height="45" style="vertical-align:-6px;"> PUFFIN: Protein Unit Discovery with Functional Supervision
+</h1>
 
+
+<!--
+<p align="center">
+  <a href="https://doi.org/10.1093/bioinformatics/xxxxx">
+    <img src="https://img.shields.io/badge/DOI-10.1093/bioinformatics/xxxxx-blue">
+  </a>
+  <img src="https://img.shields.io/badge/Venue-Bioinformatics-blue">
+  <img src="https://img.shields.io/badge/Conference-ISMB%202026-orange">
+</p>
+-->
 
 ## Installation
 
-### 0) System requirements
+### System requirements
 
 * Linux + NVIDIA GPU (recommended)
 * Recent NVIDIA drivers + CUDA toolkit compatible with your PyTorch build (example below uses **CUDA 11.8**)
 
-> If you are on a cluster, you typically only need drivers on the node + a compatible CUDA runtime (often via modules/containers).
 
----
 
-### 1) Install Miniconda
+
+### Install Miniconda
 
 ```bash
 mkdir -p ~/miniconda3
@@ -29,18 +39,17 @@ Restart your shell or:
 source ~/.bashrc
 ```
 
----
 
-### 2) Create and activate a conda environment
+
+### Create and activate a conda environment
 
 ```bash
 conda create -n pfp python=3.10 -y
 conda activate pfp
 ```
 
----
 
-### 3) Install ProteinWorkshop (dependency)
+### Install ProteinWorkshop (dependency)
 
 ```bash
 git clone https://github.com/a-r-j/ProteinWorkshop
@@ -62,9 +71,9 @@ pip install rootutils cafaeval
 pip install umap-learn pandas matplotlib datashader bokeh holoviews scikit-image colorcet
 ```
 
----
 
-### 4) Configure ProteinWorkshop environment variables
+
+### Configure ProteinWorkshop environment variables
 
 If ProteinWorkshop provides an example env file:
 
@@ -122,7 +131,7 @@ data/
 ```
 
 
-### GeneOntology (GO)
+### Gene Ontology (GO)
 
 GO datasets are downloaded **via ProteinWorkshop**.
 
@@ -189,7 +198,7 @@ PUFFIN is typically trained with a **dual objective**:
 
 ### Example: train PUFFIN with K=64 units
 ```bash
-HYDRA_FULL_ERROR=1 CUDA_VISIBLE_DEVICES=0 python src/train.py \
+python src/train.py \
   name=puffin \
   encoder=puffin \
   encoder.gnn_type=GAT \
@@ -220,7 +229,7 @@ After training, units are extracted using `src/cluster.py`.
 ### Example: extract PUFFIN segments on the test split
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python src/cluster.py \
+python src/cluster.py \
   encoder=puffin \
   encoder.num_clusters=64 \
   ckpt_path models/puffin/epoch_*.ckpt \
@@ -301,7 +310,6 @@ This analysis combines:
 The same pipeline applies to:
 
 * **Mincut pooling** (unsupervised learned units)
-* **Louvain** graph clustering
 * **ESM + k-means** (structure-agnostic baseline)
 
 All baselines produce compatible outputs under:
