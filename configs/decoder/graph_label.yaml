@@ -1,0 +1,8 @@
+graph_label:
+  _target_: "proteinworkshop.models.decoders.mlp_decoder.MLPDecoder"
+  hidden_dim: [1024, 512]
+  dropout: 0.2 # dropout rate
+  activations: ["relu", "relu", "none"] # ["relu", "relu", "sigmoid"] 
+  skip: "False" # "sum/concat" # Or sum/False
+  out_dim: ${dataset.num_classes}
+  input: "graph_embedding"

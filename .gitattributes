@@ -1,0 +1,1 @@
+data/GeneOntology/test_interpro.json filter=lfs diff=lfs merge=lfs -text

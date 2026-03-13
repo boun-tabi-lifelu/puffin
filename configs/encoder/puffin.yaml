@@ -1,0 +1,15 @@
+_target_: src.models.puffin.Puffin
+gnn_type: GAT
+hidden_dim: 512
+num_clusters: 64 
+num_res_gnn_layers: 2
+num_seg_gnn_layers: 2
+esm_model_path: /cta/share/users/esm/ESM-1b  #  "ESM-2-650M"  "ESM-1b"
+proj_layer: True
+esm_embed_dim: 256
+input_feat_dim: 256 
+fuse_lm_method: cat # sum, cat
+use_only_esm: False 
+use_seg_res_cross_attn: False
+seg_res_attn_heads: 4
+seg_res_source: "gnn"

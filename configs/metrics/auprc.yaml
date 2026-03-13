@@ -1,0 +1,3 @@
+auprc:
+  _target_: src.utils.metrics.AUPRC
+  num_classes: ${dataset.num_classes} # set the number of classes if necessary

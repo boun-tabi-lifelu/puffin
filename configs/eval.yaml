@@ -1,0 +1,50 @@
+# @package _global_
+name: "" # default name for the experiment, "" means logger (eg. wandb) will generate a unique name
+seed: 52 # seed for random number generators in pytorch, numpy and python.random
+num_workers: 16 # number of subprocesses to use for data loading.
+
+# === 2. Specify defaults here. Defaults will be overwritten by equivalently named options in this file ===
+defaults:
+  - env: default
+  - dataset: go-mf
+  - features: ca_bb
+  - encoder: puffin
+  - decoder: default
+  - transforms: default
+  - callbacks: default
+  - optimiser: adam
+  - scheduler: none
+  - trainer: gpu
+  - extras: default
+  - hydra: default
+  - metrics: none
+  - task: multilabel_graph_classification
+  - paths: default
+  - strategy: default
+  - environment: default
+  - logger: wandb # Also supported: tensorboard, wandb
+  # debugging config (enable through command line, e.g. `python train.py debug=default)
+  - debug: null
+  - optional hparams: ${encoder}_${features}
+  - _self_ # see: https://hydra.cc/docs/upgrades/1.0_to_1.1/default_composition_order/. Adding _self_ at bottom means values in this file override defaults.
+
+
+task_name: "eval"
+
+tags: ["dev"]
+
+# passing checkpoint path is necessary for evaluation
+ckpt_path: ???
+output_dir: ${ckpt_path}
+obo_path: data/go-basic-2020-06-01.obo
+ia: data/IA.txt
+no_orphans: False 
+norm: cafa
+prop: fill
+max_terms: null
+th_step: 0.001
+
+objective_type: "dual" # unsupervised, contrastive, dual
+lambda_w: 0.0  # dual
+tau: 0.1 # contrastive
+alpha: 0.05 # contrastive
