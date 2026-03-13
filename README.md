@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="puffin.png" height="45" style="vertical-align:-6px;"> PUFFIN: Protein Unit Discovery with Functional Supervision
+  <img src="puffin.png" height="40" style="vertical-align:-6px;"> PUFFIN: Protein Unit Discovery with Functional Supervision
 </h1>
 
 
