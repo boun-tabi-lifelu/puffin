@@ -723,184 +723,6 @@ def go_enrichment_fisher(
 
     return top, stats
 
-def go_enrichment_permutation_segmentwise(
-    assign_df: pd.DataFrame,
-    go_df: pd.DataFrame,
-    *,
-    go_aspect: str,
-    n_perm: int = 1000,
-    min_term_proteins: int = 10,
-    min_segments_per_proto: int = 20,
-    alpha: float = 0.5,  # pseudocount for lift stability
-    seed: int = 0,
-    length_bin_edges=(0, 10, 20, 40, 80, 160, 320, 10_000),
-    out_csv_all: Optional[Path] = None,
-    out_csv_top: Optional[Path] = None,
-    top_terms_per_proto: int = 10,
-) -> pd.DataFrame:
-    """
-    Segment-level enrichment of GO terms per prototype with a protein-stratified null:
-    permute proto labels *within each protein* (optionally within segment-length bins),
-    recompute observed counts vs null distribution.
-
-    Interpretation:
-      a_obs = #segments assigned to proto where the *protein* has go_term
-      null_mean = expected a under within-protein proto shuffle
-      p_emp = empirical p-value (>=obs) under null
-      lift_log2 = log2((a_obs+alpha)/(null_mean+alpha))
-    """
-    rng = np.random.default_rng(seed)
-    go_aspect = go_aspect.upper()
-    go_col = go_df[go_aspect]
-
-    df = assign_df.copy()
-    need = {"protein_key", "proto"}
-    miss = need - set(df.columns)
-    if miss:
-        raise ValueError(f"assign_df missing columns: {sorted(miss)}")
-
-    # segment length binning helps preserve a big nuisance factor
-    if "n_residues_assigned" in df.columns:
-        L = pd.to_numeric(df["n_residues_assigned"], errors="coerce").fillna(0).astype(int)
-        df["len_bin"] = pd.cut(L, bins=list(length_bin_edges), right=False, include_lowest=True)
-    else:
-        df["len_bin"] = "ALL"
-
-    df["protein_key"] = df["protein_key"].astype(str)
-    df["proto"] = pd.to_numeric(df["proto"], errors="coerce").astype(int)
-
-    # build term sets for proteins
-    prots = df["protein_key"].unique().tolist()
-    prot_terms = {}
-    term_to_prots = defaultdict(set)
-    for p in prots:
-        if p in go_col.index:
-            ts = set(safe_go_list(go_col.loc[p]))
-        else:
-            ts = set()
-        prot_terms[p] = ts
-        for t in ts:
-            term_to_prots[t].add(p)
-
-    # restrict to terms that occur in enough proteins (otherwise noisy)
-    terms = sorted([t for t, s in term_to_prots.items() if len(s) >= int(min_term_proteins)])
-    if not terms:
-        out = pd.DataFrame(columns=["proto","go_term","a_obs","frac_obs","null_mean","null_frac_mean","p_emp","lift_log2"])
-        if out_csv_all: out.to_csv(out_csv_all, index=False)
-        if out_csv_top: out.to_csv(out_csv_top, index=False)
-        return out
-
-    # observed counts: for each (proto, term): count segments whose protein has term
-    # We do this efficiently by adding boolean columns per term is too big, so we accumulate.
-    proto_counts = df["proto"].value_counts().to_dict()  # total segments per proto
-    prot_has_term = {t: set(term_to_prots[t]) for t in terms}
-
-    obs = defaultdict(int)
-    for proto, p in zip(df["proto"].tolist(), df["protein_key"].tolist()):
-        for t in prot_terms.get(p, ()):
-            if t in prot_has_term:  # only kept terms
-                obs[(int(proto), t)] += 1
-
-    # only prototypes with enough segments
-    protos_kept = sorted([p for p, c in proto_counts.items() if c >= int(min_segments_per_proto)])
-
-    # build null: permute proto labels within (protein_key, len_bin) groups
-    # Pre-extract group indices for speed.
-    group_keys = list(zip(df["protein_key"].tolist(), df["len_bin"].astype(str).tolist()))
-    key_to_idxs = defaultdict(list)
-    for i, k in enumerate(group_keys):
-        key_to_idxs[k].append(i)
-
-    proto_arr = df["proto"].to_numpy().astype(int)
-    prot_arr  = df["protein_key"].to_numpy().astype(str)
-
-    # For each perm, create permuted proto array
-    # and accumulate a_null[(proto, term)] += count
-    null_sum = defaultdict(float)
-    null_ge  = defaultdict(int)   # count of perms where null >= obs for p_emp
-
-    # precompute which terms each segment's protein has (list of term lists)
-    seg_terms = [list(prot_terms.get(p, ())) for p in prot_arr]
-
-    for _ in range(int(n_perm)):
-        perm_proto = proto_arr.copy()
-        for _, idxs in key_to_idxs.items():
-            if len(idxs) <= 1:
-                continue
-            vals = perm_proto[idxs].copy()
-            rng.shuffle(vals)
-            perm_proto[idxs] = vals
-
-        # accumulate counts for this permutation
-        cnt = defaultdict(int)
-        for pr, tlist in zip(perm_proto.tolist(), seg_terms):
-            pr = int(pr)
-            if pr not in protos_kept:
-                continue
-            for t in tlist:
-                if t in prot_has_term:
-                    cnt[(pr, t)] += 1
-
-        # update null stats for kept (proto,term) pairs that exist in obs (or could exist)
-        # to keep runtime sane, iterate over cnt and obs keys
-        for k, v in cnt.items():
-            null_sum[k] += float(v)
-
-        # for p_emp, compare null vs obs for observed keys
-        for (pr, t), a_obs in obs.items():
-            if pr not in protos_kept:
-                continue
-            a_null = cnt.get((pr, t), 0)
-            if a_null >= a_obs:
-                null_ge[(pr, t)] += 1
-
-    rows = []
-    for pr in protos_kept:
-        total_seg = float(proto_counts.get(pr, 0))
-        if total_seg <= 0:
-            continue
-        for t in terms:
-            a_obs = int(obs.get((pr, t), 0))
-            null_mean = float(null_sum.get((pr, t), 0.0)) / float(n_perm)
-            frac_obs = a_obs / total_seg
-            null_frac_mean = null_mean / total_seg
-
-            p_emp = (1.0 + float(null_ge.get((pr, t), 0))) / (1.0 + float(n_perm))
-            lift_log2 = float(np.log2((a_obs + alpha) / (null_mean + alpha)))
-
-            rows.append({
-                "proto": int(pr),
-                "go_term": t,
-                "a_obs": int(a_obs),
-                "frac_obs": float(frac_obs),
-                "null_mean": float(null_mean),
-                "null_frac_mean": float(null_frac_mean),
-                "p_emp": float(p_emp),
-                "lift_log2": float(lift_log2),
-            })
-
-    out = pd.DataFrame(rows)
-    if out.empty:
-        if out_csv_all: out.to_csv(out_csv_all, index=False)
-        if out_csv_top: out.to_csv(out_csv_top, index=False)
-        return out
-
-    # multiple testing correction across all proto-term tests
-    out["qval"] = benjamini_hochberg(out["p_emp"].to_numpy())
-
-    # rank by qval then lift
-    out = out.sort_values(["proto", "qval", "p_emp", "lift_log2"], ascending=[True, True, True, False])
-
-    top = out.groupby("proto", as_index=False).head(int(top_terms_per_proto))
-
-    if out_csv_all:
-        out.to_csv(out_csv_all, index=False)
-    if out_csv_top:
-        top.to_csv(out_csv_top, index=False)
-
-    return top
-
-
 
 def centroid_knn(C: np.ndarray, k: int = 20) -> Tuple[np.ndarray, np.ndarray]:
     Cn = l2_normalize(C.astype("float32"))
@@ -1317,32 +1139,20 @@ def run_one_k(
 
         print(f"Performing GO enrichment for {split}...")
         # enrichment
-        # top, enrich_stats = go_enrichment_fisher(
-        #     assign_df=df,
-        #     go_df=go_df,
-        #     go_aspect=go_aspect,
-        #     min_proteins_per_proto=enrich_min_proteins_per_proto,
-        #     min_term_proteins=enrich_min_term_proteins,
-        #     top_terms_per_proto=enrich_top_terms,
-        #     qval_thresh=enrich_qval,
-        #     out_csv_all=eval_dir / f"go_enrichment_{split}_all.csv",
-        #     out_csv_top=eval_dir / f"go_enrichment_{split}_top.csv",
-        # )
-        top = go_enrichment_permutation_segmentwise(
+        top, enrich_stats = go_enrichment_fisher(
             assign_df=df,
             go_df=go_df,
             go_aspect=go_aspect,
-            n_perm=1000,  # start with 500-1000; increase if you want tighter p's
+            min_proteins_per_proto=enrich_min_proteins_per_proto,
             min_term_proteins=enrich_min_term_proteins,
-            min_segments_per_proto=max(20, enrich_min_proteins_per_proto),  # reinterpret threshold
-            seed=seed,
+            top_terms_per_proto=enrich_top_terms,
+            qval_thresh=enrich_qval,
             out_csv_all=eval_dir / f"go_enrichment_{split}_all.csv",
             out_csv_top=eval_dir / f"go_enrichment_{split}_top.csv",
-            top_terms_per_proto=enrich_top_terms,
         )
+        
         enrich_stats = {
             "tested_prototypes": float(top["proto"].nunique()) if not top.empty else 0.0,
-            "note": "permutation_segmentwise",
         }
         
         print(f"Performing prototype GO retrieval evaluation for {split}...")
