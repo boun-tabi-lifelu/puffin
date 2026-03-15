@@ -803,22 +803,6 @@ def plot_go_entropy_hist(df, out_path):
     plt.savefig(out_path, dpi=300)
     plt.close()
 
-# def build_compositionality_table(summary_dfs):
-#     """
-#     summary_dfs: dict[name -> summary_dataframe]
-#     """
-#     rows = []
-#     for name, df in summary_dfs.items():
-#         r = df[df["tag"] == "knn_true"].iloc[0]
-#         rows.append({
-#             "model": name,
-#             "shared_go_frac": r["mean_shared_go_frac_neighbors"],
-#             "go_entropy": r["go_entropy_mean"],
-#             "neff_neighbors": r["mean_neff_neighbor_proteins"],
-#             "reuse_gap": r["reuse_gap"],
-#             "hub_gini": r["hub_gini"],
-#         })
-#     return pd.DataFrame(rows)
 
 
 # -------------------------
@@ -960,21 +944,14 @@ def main():
         hubness.to_csv(out_hub, index=False)
 
 
-    # ---- Plots (PNG+PDF) ----
-    # These functions must exist in your file:
-    #   plot_diversity_violin(per_query, out_base)
-    #   plot_alignment_vs_diversity(per_query, out_base)
-    #   plot_hubness_lorenz(hub_df, out_base)
-    #   plot_reuse_gap(summary, out_base)
-    try:
-        plot_diversity_violin(per_query, out_dir / f"plot_diversity_violin_{a.split}")
-        plot_alignment_vs_diversity(per_query, out_dir / f"plot_alignment_vs_diversity_{a.split}")
-        plot_hubness_lorenz(hubness, out_dir / f"plot_hubness_lorenz_{a.split}")
-        plot_reuse_gap(summary, out_dir / f"plot_reuse_gap_{a.split}")
-        plot_go_entropy_hist(per_query, out_dir / f"plot_go_entropy_hist_{a.split}.png")
-        print(f"[OK] Wrote plots to: {out_dir}")
-    except Exception as e:
-        print(f"[WARN] Plotting failed (continuing): {e}")
+   
+    plot_diversity_violin(per_query, out_dir / f"plot_diversity_violin_{a.split}")
+    plot_alignment_vs_diversity(per_query, out_dir / f"plot_alignment_vs_diversity_{a.split}")
+    plot_hubness_lorenz(hubness, out_dir / f"plot_hubness_lorenz_{a.split}")
+    plot_reuse_gap(summary, out_dir / f"plot_reuse_gap_{a.split}")
+    plot_go_entropy_hist(per_query, out_dir / f"plot_go_entropy_hist_{a.split}.png")
+    print(f"[OK] Wrote plots to: {out_dir}")
+    
 
     print(f"[OK] {out_json}")
     print(f"[OK] {out_csv}")
