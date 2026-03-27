@@ -272,10 +272,10 @@ python src/segment_characterize.py \
 
 Units are evaluated by checking whether **nearby units in embedding space** share GO functions.
 
-### Example: segment-level GO evaluation
+### Example: unit-level GO evaluation
 
 ```bash
-python src/segment_func_eval.py \
+python src/unit_func_eval.py \
   --segments_root units/ \
   --model_name puffin_K64 \
   --split valid \
