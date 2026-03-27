@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-segment_func_reports_knn.py
+unit_func_eval.py
 ---------------------------
 
 Standalone: Unit-level kNN neighborhood GO enrichment on segment embeddings
@@ -32,19 +32,6 @@ Outputs:
     unit_knn_go_enrichment_<split>.json
     unit_knn_go_enrichment_<split>_per_query.csv
     unit_knn_go_enrichment_<split>_summary.csv   (one row per tag: true + controls)
-
-Example:
-  python segment_func_reports_knn.py \
-    --segments_root segments \
-    --model_name puffin_K64 \
-    --split test \
-    --annotation_dir data/go \
-    --go_aspect MF \
-    --out_root segment_func_reports \
-    --device cpu \
-    --k_neighbors 50 \
-    --n_queries 5000 \
-    --min_assigned 5
 
 Notes:
 - meta["protein_key"] is derived from pdb_id -> legacy_id (PDB-CHAIN).
@@ -372,16 +359,11 @@ def eval_unit_knn_go(
 ) -> Tuple[Dict[str, Any], pd.DataFrame]:
     """
     Extended evaluation:
-    - existing: shared_go_frac_neighbors, hit_any_shared_go, fisher enrichment for query terms
-    - new (compositionality / collapse diagnostics):
-        * unique_neighbor_proteins (protein-dedup count)
-        * neff_neighbor_proteins (Simpson inverse based on segment multiplicity per protein)
-        * top1_protein_share, top3_protein_share
-        * reuse gap: mean(J|sharedGO) - mean(J|noSharedGO) on sampled query pairs
-        * hubness: neighbor appearance distribution across proteins (Gini, top1% share, max/median)
+    - shared_go_frac_neighbors, hit_any_shared_go, fisher enrichment for query terms
     Returns:
-      rep: summary dict (includes rep["_hubness_counts"] = dict[protein->count])
+      rep: summary dict
       dfq: per-query dataframe (extended columns)
+      dfr: per-term dataframe
     """
     go_aspect = go_aspect.upper()
     prot_go_all = _build_protein_go_map(go_df, go_aspect=go_aspect)
@@ -402,7 +384,7 @@ def eval_unit_knn_go(
 
     rows: List[Dict[str, Any]] = []
     term_rows: List[Dict[str, Any]] = []
-    # For reuse-gap + hubness
+    
     query_neighbor_sets: List[set] = []
     query_proteins: List[str] = []
     neighbor_appearance = defaultdict(int)  # protein -> count appearances across query neighbor sets
@@ -432,21 +414,9 @@ def eval_unit_knn_go(
 
         m = int(len(nprot_set))
 
-        # segment-multiplicity stats by protein (dominance / collapse)
-        if len(nprot_all) > 0:
-            uniq, cnt = np.unique(np.asarray(nprot_all, dtype=object), return_counts=True)
-            neff = neff_from_counts(cnt)
-            top1 = float(cnt.max() / cnt.sum())
-            top3 = float(np.sort(cnt)[-3:].sum() / cnt.sum()) if cnt.size >= 3 else 1.0
-        else:
-            neff = float("nan")
-            top1 = float("nan")
-            top3 = float("nan")
-
         # query segment id best-effort
         q_seg_id = int(meta.iloc[qi]["global_seg_index"]) if "global_seg_index" in meta.columns else int(qi)
 
-        # store for reuse-gap + hubness (even if q_terms empty; reuse split uses GO later)
         query_neighbor_sets.append(nprot_set)
         query_proteins.append(q_prot)
         for p in nprot_set:
@@ -461,10 +431,7 @@ def eval_unit_knn_go(
                 "k": int(k_neighbors),
                 "neighbor_proteins": int(m),
                 "unique_neighbor_proteins": int(m),
-                "neff_neighbor_proteins": float(neff),
                 "go_entropy_neighborhood": go_H,
-                "top1_protein_share": float(top1),
-                "top3_protein_share": float(top3),
                 "has_go": int(len(q_terms) > 0),
                 "hit_any_shared_go": 0,
                 "shared_go_frac_neighbors": float("nan"),
@@ -553,14 +520,10 @@ def eval_unit_knn_go(
             "k": int(k_neighbors),
             "neighbor_proteins": int(m),
             "unique_neighbor_proteins": int(m),
-            "neff_neighbor_proteins": float(neff),
             "go_entropy_neighborhood": go_H,
-            "top1_protein_share": float(top1),
-            "top3_protein_share": float(top3),
             "has_go": 1,
             "hit_any_shared_go": int(hit_any),
             "shared_go_frac_neighbors": float(shared_frac),
-
             "best_pval": best_p,
             "best_qval_bh": best_q,
             "best_odds_approx": best_odds,
@@ -675,7 +638,6 @@ def main():
     reports: List[Dict[str, Any]] = []
     per_query_all: List[pd.DataFrame] = []
     per_term_all: List[pd.DataFrame] = []
-    hubness_rows: List[pd.DataFrame] = []
 
     for tag, idx in tags_and_idx:
         print(f"[INFO] Evaluating tag: {tag}")
