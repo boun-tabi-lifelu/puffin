@@ -1,0 +1,40 @@
+{
+  "K": 1024,
+  "assignment_metric": "cosine",
+  "created_utc": "2026-07-08T22:12:40.180816+00:00",
+  "embedding_dim": 512,
+  "files": {
+    "centroids": "centroids.npy",
+    "debias_transform": "debias_transform.json",
+    "functions_csv": "unit_cluster_functions.csv",
+    "npz_bundle": "unit_cluster_artifact.npz",
+    "runtime": "puffin_unit_cluster_runtime.py",
+    "summary_csv": "unit_cluster_summary.csv",
+    "support_csv": "unit_cluster_support.csv",
+    "unit_clusters_json": "unit_clusters.json"
+  },
+  "format": "puffin-unit-cluster-functions-v1",
+  "function_assignment": {
+    "go_aspect": "MF",
+    "include_nonsignificant": false,
+    "max_qval": 0.05,
+    "min_in_unit_cluster": 1,
+    "min_odds_ratio": 1.0,
+    "min_precision": 0.0,
+    "source_split": "train",
+    "top_terms_per_unit_cluster": 10
+  },
+  "model_name": "puffin_K64_v4",
+  "preprocessing": {
+    "debias_transform_file": "debias_transform.json",
+    "name": "l2_normalize_subtract_train_mean_remove_train_pcs_l2_normalize",
+    "remove_pcs": 2
+  },
+  "source_enrichment_file": "go_enrichment_train_all.csv",
+  "source_result": "puffin_K64_v4/K1024",
+  "stats": {
+    "n_function_rows": 8330,
+    "n_unit_clusters": 1024,
+    "n_unit_clusters_with_functions": 986
+  }
+}
