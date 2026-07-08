@@ -244,6 +244,23 @@ python src/cluster.py \
 
 These define residue → unit assignments and unit embeddings.
 
+### Quick inference on one PDB
+
+The default checkpoint is downloaded from [lifelu/puffin](https://huggingface.co/lifelu/puffin). To assign PUFFIN units to a single structure:
+
+```bash
+python scripts/infer_puffin_units.py path/to/protein.pdb \
+  --chain A \
+  --output-dir units/single_pdb/
+```
+
+The model checkpoint can be overwritten with the `--checkpoint` flag. 
+
+**Outputs**
+
+* `<pdb>_puffin_units.csv`: residue-level PUFFIN unit assignments
+* `<pdb>_puffin_unit_embeddings.pt`: segment embeddings and masks
+
 ## Unit characterization (structure & statistics)
 
 This step analyzes extracted units:
