@@ -181,9 +181,10 @@ python src/data/ia.py --annot .\data\GeneOntology\ground_truth\terms.tsv \
 
 1. **Train a model** (PUFFIN / Protygus / mincut variants)
 2. **Extract protein units (segments)** from trained models
-3. **Characterize units** (size, structure, connectivity, random baselines)
-4. **Evaluate unit function** (GO neighborhood tests)
-5. **Analyze unit–InterPro correspondence** (optional, deeper analysis)
+3. **Learn global unit clusters** from train units and assign valid/test units
+4. **Characterize units** (size, structure, connectivity, random baselines)
+5. **Evaluate unit function** (GO neighborhood tests)
+6. **Analyze unit–InterPro correspondence** (optional, deeper analysis)
 
 Each step is modular and can be run independently.
 
@@ -243,6 +244,97 @@ python src/cluster.py \
 * `test_segment_metadata.csv`
 
 These define residue → unit assignments and unit embeddings.
+
+### Quick inference on one PDB
+
+The default checkpoint is downloaded from [lifelu/puffin](https://huggingface.co/lifelu/puffin). To assign PUFFIN units to a single structure:
+
+```bash
+python scripts/infer_puffin_units.py path/to/protein.pdb \
+  --chain A \
+  --output-dir units/single_pdb/
+```
+
+The model checkpoint can be overwritten with the `--checkpoint` flag.
+
+To also assign each active PUFFIN unit to a global unit cluster and attach the retained GO functions for that cluster:
+
+```bash
+python scripts/infer_puffin_units.py path/to/protein.pdb \
+  --chain A \
+  --output-dir units/single_pdb/ \
+  --unit-cluster-artifact artifacts/puffin-unit-cluster-functions \
+  --unit-cluster-top-n 5 \
+  --unit-cluster-max-qval 0.05
+```
+
+**Outputs**
+
+* `<pdb>_puffin_units.csv`: residue-level PUFFIN unit assignments; includes unit-cluster/function columns when `--unit-cluster-artifact` is provided
+* `<pdb>_puffin_unit_metadata.csv`: active units, residue counts, and optional unit-cluster/function assignments
+* `<pdb>_puffin_unit_cluster_functions.csv`: one row per active unit with its assigned unit cluster and GO functions, written when `--unit-cluster-artifact` is provided
+* `<pdb>_puffin_unit_embeddings.pt`: segment embeddings, masks, and optional unit-cluster assignment metadata
+
+## Global unit cluster learning
+
+After extracting units for `train`, `valid`, and `test`, global unit clusters can be learned from the train split and reused to assign validation/test units. This turns model-specific unit embeddings into a shared set of unit clusters and cluster-level GO enrichment reports.
+
+### Example: learn unit clusters for one model
+
+```bash
+python src/global_prototypes_fit.py \
+  --segments_root ismb26/segments \
+  --model_name puffin_K64 \
+  --out_root ismb26/unit_clusters \
+  --annotation_dir data/GeneOntology \
+  --go_aspect MF \
+  --k_list 128,256,512,1024,2048,4096 \
+  --min_assigned 3 \
+  --remove_pcs 2 \
+  --max_per_protein_train 50 \
+  --max_per_protein_eval 0 \
+  --enrich_top_terms 10 \
+  --enrich_min_proteins_per_proto 10 \
+  --enrich_min_term_proteins 10 \
+  --enrich_qval 0.05 \
+  --device cuda
+```
+
+Expected input layout:
+
+```text
+ismb26/segments/
++-- <model_name>/
+    +-- train/
+    +-- valid/
+    +-- test/
+```
+
+Each split directory should contain the segment metadata and embeddings produced by unit extraction, for example `train_segment_metadata.csv` and `train_segment_embeddings.npy`. If your extracted units live under another parent directory, such as `units/`, pass that path with `--segments_root` and keep the `<model_name>/<split>/` layout.
+
+**What this does**
+
+* fits a debias transform and unit-cluster centroids on train unit embeddings
+* assigns train/valid/test units to their nearest unit cluster
+* computes cluster-level GO enrichment and unit-cluster GO retrieval metrics
+* runs the requested K sweep and writes summary plots/tables
+
+**Outputs**
+
+Results are written under:
+
+```text
+ismb26/unit_clusters/<model_name>/K<k>/
+```
+
+Main files include:
+
+* `train_centroids.npy`: learned unit-cluster centroids
+* `debias_transform.json`: train-fitted preprocessing transform
+* `assignments_train.csv`, `assignments_valid.csv`, `assignments_test.csv`
+* `eval/go_enrichment_<split>_top.csv`
+
+Cluster-function associations are created from the GO enrichment tables written during unit-cluster learning. See `scripts/README.md` for the export and inference-ready artifact workflow.
 
 ## Unit characterization (structure & statistics)
 
@@ -323,14 +415,15 @@ so they can be evaluated identically.
 ```
 ismb26/
 ├── models/                 # trained checkpoints
-├── units/               # extracted units
+├── segments/               # extracted units
 │   └── puffin/
 │       ├── train/
 │       ├── valid/
 │       └── test/
+├── unit_clusters/          # global unit cluster K sweeps and assignments
 ├── results/
-│   ├── unit_reports/    # structural characterization
-│   ├── unit_func_reports/ # GO neighborhood eval
+│   ├── unit_reports/       # structural characterization
+│   ├── unit_func_reports/  # GO neighborhood eval
 │   └── func_eval/          # protein-level eval logs
 ```
 
