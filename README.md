@@ -255,12 +255,25 @@ python scripts/infer_puffin_units.py path/to/protein.pdb \
   --output-dir units/single_pdb/
 ```
 
-The model checkpoint can be overwritten with the `--checkpoint` flag. 
+The model checkpoint can be overwritten with the `--checkpoint` flag.
+
+To also assign each active PUFFIN unit to a global unit cluster and attach the retained GO functions for that cluster:
+
+```bash
+python scripts/infer_puffin_units.py path/to/protein.pdb \
+  --chain A \
+  --output-dir units/single_pdb/ \
+  --unit-cluster-artifact artifacts/puffin-unit-cluster-functions \
+  --unit-cluster-top-n 5 \
+  --unit-cluster-max-qval 0.05
+```
 
 **Outputs**
 
-* `<pdb>_puffin_units.csv`: residue-level PUFFIN unit assignments
-* `<pdb>_puffin_unit_embeddings.pt`: segment embeddings and masks
+* `<pdb>_puffin_units.csv`: residue-level PUFFIN unit assignments; includes unit-cluster/function columns when `--unit-cluster-artifact` is provided
+* `<pdb>_puffin_unit_metadata.csv`: active units, residue counts, and optional unit-cluster/function assignments
+* `<pdb>_puffin_unit_cluster_functions.csv`: one row per active unit with its assigned unit cluster and GO functions, written when `--unit-cluster-artifact` is provided
+* `<pdb>_puffin_unit_embeddings.pt`: segment embeddings, masks, and optional unit-cluster assignment metadata
 
 ## Global unit cluster learning
 
