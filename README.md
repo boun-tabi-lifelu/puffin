@@ -3,15 +3,15 @@
 </h1>
 
 
-<!--
+
 <p align="center">
-  <a href="https://doi.org/10.1093/bioinformatics/xxxxx">
-    <img src="https://img.shields.io/badge/DOI-10.1093/bioinformatics/xxxxx-blue">
+  <a href="https://doi.org/10.1093/bioinformatics/btag265">
+    <img src="https://img.shields.io/badge/DOI-10.1093/bioinformatics/btag265-blue">
   </a>
-  <img src="https://img.shields.io/badge/Venue-Bioinformatics-blue">
+  <img src="https://img.shields.io/badge/Venue-Bioinformatics-yellow">
   <img src="https://img.shields.io/badge/Conference-ISMB%202026-orange">
 </p>
--->
+
 
 ## Installation
 
@@ -101,7 +101,6 @@ WANDB_API_KEY=""          # optional
 WANDB_ENTITY="gokceuludogan"  # optional
 WANDB_PROJECT="puffin"    # optional
 ```
-
 
 
 ## Data
@@ -220,7 +219,6 @@ python src/train.py \
 * Optimizes both GO prediction and unit discovery
 * Saves checkpoints under `models/puffin/`
 
----
 
 ## Unit extraction
 
@@ -303,7 +301,6 @@ This analysis combines:
 
 * Associated script: `src/interpro_proto_go_term_comparison.py`
 
----
 
 ## Baselines supported
 
@@ -320,7 +317,6 @@ ismb26/segments/<model_name>/<split>/
 
 so they can be evaluated identically.
 
----
 
 ## Typical directory layout
 
@@ -341,14 +337,20 @@ ismb26/
 
 ## Reference
 
-If you use this repository, please cite the following related [paper]():
+If you use this repository, please cite the following related [paper](https://academic.oup.com/bioinformatics/article/42/Supplement_1/btag265/8726308):
 ```bibtex
-@article{,
-  title={},
-  author={},
-  journal={},
-  year={},
-  publisher={}
+@article{10.1093/bioinformatics/btag265,
+    author = {Uludoğan, Gökçe and Giledereli, Buse and Ozkirimli, Elif and Özgür, Arzucan},
+    title = {PUFFIN: protein unit discovery with functional supervision},
+    journal = {Bioinformatics},
+    volume = {42},
+    number = {Supplement_1},
+    pages = {btag265},
+    year = {2026},
+    month = {07},
+    issn = {1367-4811},
+    doi = {10.1093/bioinformatics/btag265},
+    url = {https://doi.org/10.1093/bioinformatics/btag265},
 }
 ```
 
