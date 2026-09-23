@@ -46,6 +46,17 @@ dependencies = [
     "rootutils"
 ]
 
+[project.optional-dependencies]
+ui = [
+    "gradio==4.44.1",
+    "fastapi==0.103.2",
+    "starlette==0.27.0",
+    "pydantic==2.6.4",
+]
+test = [
+    "pytest",
+]
+
 #                                                                                                                                                                                                                  
 #[project.urls.docs]
 

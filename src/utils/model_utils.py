@@ -70,6 +70,18 @@ def load_model(cfg, batch, device: Optional[Union[str, torch.device]] = None):
 
     encoder_weights = _prefixed_weights(state_dict, "encoder")
     if encoder_weights:
+        runtime_keys = set(model.encoder.state_dict())
+        ignored_keys = [key for key in encoder_weights if key not in runtime_keys]
+        if ignored_keys:
+            log.info(
+                "Ignoring {} checkpoint encoder keys not used by this runtime configuration.",
+                len(ignored_keys),
+            )
+            encoder_weights = collections.OrderedDict(
+                (key, value)
+                for key, value in encoder_weights.items()
+                if key in runtime_keys
+            )
         err = model.encoder.load_state_dict(encoder_weights, strict=False)
         log.info(f"Loading encoder weights: {err}")
     else:

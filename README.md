@@ -275,6 +275,18 @@ python scripts/infer_puffin_units.py path/to/protein.pdb \
 * `<pdb>_puffin_unit_cluster_functions.csv`: one row per active unit with its assigned unit cluster and GO functions, written when `--unit-cluster-artifact` is provided
 * `<pdb>_puffin_unit_embeddings.pt`: segment embeddings, masks, and optional unit-cluster assignment metadata
 
+### Interactive unit explorer
+
+An optional Gradio application provides chain selection, PUFFIN unit and global
+unit-cluster coloring, ranked GO terms, and downloadable JSON results:
+
+```bash
+pip install -e ".[ui]"
+python src/gradio_app.py
+```
+
+See [`README_gradio_app.md`](README_gradio_app.md) for usage details.
+
 ## Global unit cluster learning
 
 After extracting units for `train`, `valid`, and `test`, global unit clusters can be learned from the train split and reused to assign validation/test units. This turns model-specific unit embeddings into a shared set of unit clusters and cluster-level GO enrichment reports.

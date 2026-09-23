@@ -130,6 +130,7 @@ dmypy.json
 
 # Hydra
 outputs/
+results/gradio/
 
 # Data
 *.pdb
