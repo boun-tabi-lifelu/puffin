@@ -136,16 +136,22 @@ class DualModel(BenchMarkModel):
         self.segment_info_nce = SegmentInfoNCELoss(temperature=mutual_temp)
 
         # ---- Schedules ----
-        self.unit_weight_min = float(cfg.get("schedule.unit_weight_min", 0.0))
-        self.unit_weight_max = float(cfg.get("schedule.unit_weight_max", self.unit_weight))
+        # NOTE: these were previously read as cfg.get("schedule.temp_end", ...),
+        # i.e. a literal dotted key that OmegaConf never resolves, so the defaults
+        # were the only reachable values. Read the nested `schedule` group instead;
+        # with no `schedule` in the config the defaults below are unchanged.
+        sched = cfg.get("schedule", None) or {}
 
-        self.warmup_epochs = int(cfg.get("schedule.warmup_epochs", 5))
-        self.ramp_epochs = int(cfg.get("schedule.ramp_epochs", 10))
+        self.unit_weight_min = float(sched.get("unit_weight_min", 0.10))
+        self.unit_weight_max = float(sched.get("unit_weight_max", self.unit_weight))
 
-        self.temp_start = float(cfg.get("schedule.temp_start", 2.0))   # softer
-        self.temp_end = float(cfg.get("schedule.temp_end", 1.0))       # sharper
-        self.temp_warmup_epochs = int(cfg.get("schedule.temp_warmup_epochs", self.warmup_epochs))
-        self.temp_ramp_epochs = int(cfg.get("schedule.temp_ramp_epochs", self.ramp_epochs))
+        self.warmup_epochs = int(sched.get("warmup_epochs", 3))
+        self.ramp_epochs = int(sched.get("ramp_epochs", 2))
+
+        self.temp_start = float(sched.get("temp_start", 1.0))   # softer
+        self.temp_end = float(sched.get("temp_end", 0.2))       # sharper
+        self.temp_warmup_epochs = int(sched.get("temp_warmup_epochs", self.warmup_epochs))
+        self.temp_ramp_epochs = int(sched.get("temp_ramp_epochs", self.ramp_epochs))
 
  
         log.info(
