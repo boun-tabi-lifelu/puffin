@@ -42,6 +42,7 @@ LR3E4_UNIT_CLUSTER_ARTIFACT_DIR = Path(
         str(PROJECT_ROOT / "artifacts" / "puffin-esm-lr3e4-unit-cluster-functions"),
     )
 )
+ASSIGN_TEMPERATURE = 1.0
 ESM_MODES = ["Legacy zero embeddings", "Uploaded embeddings", "Compute ESM"]
 # The released checkpoint was trained with zeroed ESM features; the lr=3e-4
 # retrain was trained with real ESM-1b embeddings, so each defaults accordingly.
@@ -400,6 +401,9 @@ def run_puffin(
         raise ValueError(f"Unknown ESM mode: {esm_mode}")
     model = load_model(cfg, batch=batch, device="auto")
     model.eval()
+    # load_model's lazy-init forward sets the encoder temperature to the training
+    # schedule's temp_end; the unit-cluster artifacts were built at tau=1.0.
+    model.encoder.assign_temperature = ASSIGN_TEMPERATURE
     device = next(model.parameters()).device
     batch = batch.to(device)
     batch = model.featurise(batch)
