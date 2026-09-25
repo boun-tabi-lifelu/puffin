@@ -487,10 +487,14 @@ def eval_unit_knn_go(
 
             for x, qv in zip(term_tests, qvals):
                 x["qval"] = float(qv)
-                if x["qval"] < best_q or (x["qval"] == best_q and x["pval"] < best_p):
-                    best_p = x["pval"]
-                    best_q = x["qval"]
-                    best_odds = x["odds"]
+
+            # Pick the most significant term (smallest q, ties broken by p).
+            # NB: comparing against a NaN seed is always False, so seeding
+            # best_q/best_p with NaN left these columns NaN for every query.
+            best = min(term_tests, key=lambda x: (x["qval"], x["pval"]))
+            best_p = best["pval"]
+            best_q = best["qval"]
+            best_odds = best["odds"]
 
             # write ALL term-level rows
             for x in term_tests:
