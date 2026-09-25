@@ -20,10 +20,26 @@ Each analysis is persisted under `results/gradio/<run_id>/` with `input.pdb` and
 `results.json`. Set `PUFFIN_RESULTS_DIR` before launching to use another storage
 location.
 
-The app accepts a PDB file and produces:
-- a left-side input panel,
-- a center 3D structure preview,
-- a right-side table of PUFFIN-discovered units with downloadable JSON output.
+The app accepts a PDB file and runs it through two PUFFIN checkpoints side by
+side. It produces:
+- a left-side input panel with an agreement summary (unit counts and the
+  adjusted Rand index over shared residues) and downloadable JSON output,
+- one panel per model with a 3D structure preview and its table of units.
+
+Each panel has its own checkpoint and ESM mode. The defaults are:
+
+| Panel | Checkpoint | ESM mode | Unit-cluster artifact |
+|---|---|---|---|
+| Model A | Released `lifelu/puffin` | Legacy zero embeddings | `artifacts/puffin-unit-cluster-functions` |
+| Model B | `lr=3e-4` ESM retrain (`models/puffin_esm_lr3e4/epoch_019.ckpt`) | Compute ESM | `artifacts/puffin-esm-lr3e4-unit-cluster-functions` |
+
+The released checkpoint was trained with zeroed ESM features, while the
+`lr=3e-4` retrain was trained with real ESM-1b embeddings, so each ESM mode
+matches its training setup. Changing a panel's checkpoint resets its ESM mode
+to that model's default. The `lr=3e-4` checkpoint is not on Hugging Face; place
+it at the path above or set `PUFFIN_LR3E4_CHECKPOINT_PATH`. Unit IDs and colors
+are local to each model, and unit-cluster IDs come from each model's own K1024
+inventory, so they do not correspond across panels.
 
 The checkpoint is downloaded from
 [`lifelu/puffin`](https://huggingface.co/lifelu/puffin/tree/main) as

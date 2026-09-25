@@ -3,7 +3,13 @@ from html import unescape
 import pytest
 
 from src.gradio_app import (
+    DEFAULT_MODEL_A,
+    DEFAULT_MODEL_B,
+    LR3E4_UNIT_CLUSTER_ARTIFACT_DIR,
+    MODEL_REGISTRY,
     UNIT_CLUSTER_ARTIFACT_DIR,
+    adjusted_rand_index,
+    compare_model_outputs,
     _build_structure_html,
     _puffin_config,
     _unit_cluster_terms,
@@ -116,3 +122,41 @@ def test_ui_uses_bundled_artifact_and_zero_esm_by_default():
 
     computed_cfg = _puffin_config("/tmp/model.ckpt", "/tmp/ESM-1b")
     assert computed_cfg.encoder.esm_model_path == "/tmp/ESM-1b"
+
+
+def test_comparison_defaults_to_released_and_lr3e4():
+    assert MODEL_REGISTRY[DEFAULT_MODEL_A]["checkpoint"] == "lifelu/puffin"
+    assert MODEL_REGISTRY[DEFAULT_MODEL_A]["esm_mode"] == "Legacy zero embeddings"
+    assert MODEL_REGISTRY[DEFAULT_MODEL_B]["checkpoint"].endswith(
+        "puffin_esm_lr3e4/epoch_019.ckpt"
+    )
+    assert MODEL_REGISTRY[DEFAULT_MODEL_B]["esm_mode"] == "Compute ESM"
+    assert MODEL_REGISTRY[DEFAULT_MODEL_B]["artifact_dir"] == LR3E4_UNIT_CLUSTER_ARTIFACT_DIR
+    assert len(_unit_cluster_terms(LR3E4_UNIT_CLUSTER_ARTIFACT_DIR)) == 1024
+
+
+def test_adjusted_rand_index_ignores_label_names():
+    assert adjusted_rand_index([0, 0, 1, 1], [5, 5, 7, 7]) == 1.0
+    assert adjusted_rand_index([0, 0, 1, 1], [0, 1, 0, 1]) < 0
+
+
+def test_compare_model_outputs_uses_shared_residues():
+    output_a = {
+        "assignments": [
+            {"residue": 1, "unit_id": 0},
+            {"residue": 2, "unit_id": 0},
+            {"residue": 3, "unit_id": 1},
+        ],
+        "units": [{"unit_id": 0}, {"unit_id": 1}],
+    }
+    output_b = {
+        "assignments": [{"residue": 1, "unit_id": 4}, {"residue": 2, "unit_id": 4}],
+        "units": [{"unit_id": 4}],
+    }
+
+    comparison = compare_model_outputs(output_a, output_b)
+
+    assert comparison["shared_residues"] == 2
+    assert comparison["units_a"] == 2
+    assert comparison["units_b"] == 1
+    assert comparison["adjusted_rand_index"] == 1.0

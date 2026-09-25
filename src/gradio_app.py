@@ -32,6 +32,32 @@ UNIT_CLUSTER_ARTIFACT_DIR = Path(
         str(PROJECT_ROOT / "artifacts" / "puffin-unit-cluster-functions"),
     )
 )
+LR3E4_CHECKPOINT = os.getenv(
+    "PUFFIN_LR3E4_CHECKPOINT_PATH",
+    str(PROJECT_ROOT / "models" / "puffin_esm_lr3e4" / "epoch_019.ckpt"),
+)
+LR3E4_UNIT_CLUSTER_ARTIFACT_DIR = Path(
+    os.getenv(
+        "PUFFIN_LR3E4_UNIT_CLUSTER_ARTIFACT_DIR",
+        str(PROJECT_ROOT / "artifacts" / "puffin-esm-lr3e4-unit-cluster-functions"),
+    )
+)
+ESM_MODES = ["Legacy zero embeddings", "Uploaded embeddings", "Compute ESM"]
+# The released checkpoint was trained with zeroed ESM features; the lr=3e-4
+# retrain was trained with real ESM-1b embeddings, so each defaults accordingly.
+MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "Released (lifelu/puffin)": {
+        "checkpoint": DEFAULT_CHECKPOINT,
+        "artifact_dir": UNIT_CLUSTER_ARTIFACT_DIR,
+        "esm_mode": "Legacy zero embeddings",
+    },
+    "lr=3e-4 (ESM retrain)": {
+        "checkpoint": LR3E4_CHECKPOINT,
+        "artifact_dir": LR3E4_UNIT_CLUSTER_ARTIFACT_DIR,
+        "esm_mode": "Compute ESM",
+    },
+}
+DEFAULT_MODEL_A, DEFAULT_MODEL_B = list(MODEL_REGISTRY)
 GO_OBO_PATH = os.getenv("PUFFIN_GO_OBO_PATH", "")
 QUICKGO_TERM_URL = "https://www.ebi.ac.uk/QuickGO/term/{go_id}"
 QUICKGO_API_URL = "https://www.ebi.ac.uk/QuickGO/services/ontology/go/terms/{go_ids}"
@@ -199,6 +225,11 @@ def _proteinworkshop_esm_path(esm_model_path: str) -> str:
 def _resolve_checkpoint(checkpoint: str) -> str:
     if Path(checkpoint).is_file():
         return checkpoint
+    if checkpoint.endswith(".ckpt"):
+        raise FileNotFoundError(
+            f"Checkpoint not found: {checkpoint}. Place it there or set the matching "
+            "PUFFIN_*_CHECKPOINT_PATH environment variable."
+        )
 
     from huggingface_hub import hf_hub_download
 
@@ -315,6 +346,7 @@ def run_puffin(
     esm_embeddings_path: str | None = None,
     esm_mode: str = "Legacy zero embeddings",
     esm_model_path: str = ESM_MODEL_PATH,
+    artifact_dir: Path = UNIT_CLUSTER_ARTIFACT_DIR,
 ) -> Dict[str, Any]:
     """Run PUFFIN with uploaded, computed, or historical zero ESM features."""
     import torch
@@ -391,7 +423,7 @@ def run_puffin(
         residues = [row["residue"] for row in assignments if row["unit_id"] == unit_id]
         units.append({"unit_id": unit_id, "residue_count": len(residues), "residues": residues})
     try:
-        prototype_ids = assign_global_prototypes(output["node_embedding"][0])
+        prototype_ids = assign_global_prototypes(output["node_embedding"][0], artifact_dir)
     except (FileNotFoundError, KeyError, ValueError):
         prototype_ids = {}
     unit_clusters = [
@@ -403,7 +435,8 @@ def run_puffin(
         "assignments": assignments,
         "units": units,
         "unit_clusters": _enrichment_rows(
-            [unit for unit in unit_clusters if unit["prototype_id"] is not None]
+            [unit for unit in unit_clusters if unit["prototype_id"] is not None],
+            artifact_dir,
         ),
         "checkpoint": checkpoint_path,
         "chain": selected_chain,
@@ -415,14 +448,15 @@ def build_download_payload(payload: Dict[str, Any]) -> str:
     return json.dumps(payload, indent=2)
 
 
-def assign_global_prototypes(unit_embeddings: Any) -> Dict[int, int]:
+def assign_global_prototypes(
+    unit_embeddings: Any, artifact_dir: Path = UNIT_CLUSTER_ARTIFACT_DIR
+) -> Dict[int, int]:
     """Map local unit embeddings to the trained global prototype inventory."""
     import numpy as np
 
-    centroids = np.load(UNIT_CLUSTER_ARTIFACT_DIR / "centroids.npy").astype("float32")
-    transform = json.loads(
-        (UNIT_CLUSTER_ARTIFACT_DIR / "debias_transform.json").read_text()
-    )
+    artifact_dir = Path(artifact_dir)
+    centroids = np.load(artifact_dir / "centroids.npy").astype("float32")
+    transform = json.loads((artifact_dir / "debias_transform.json").read_text())
     embeddings = unit_embeddings.detach().cpu().numpy().astype("float32")
 
     def normalize(values: Any) -> Any:
@@ -482,9 +516,11 @@ def resolve_go_names(go_ids: List[str]) -> Dict[str, str]:
     names.update(_remote_go_names(tuple(go_id for go_id in unique_ids if go_id not in names)))
     return names
 
-@lru_cache(maxsize=1)
-def _unit_cluster_terms() -> Dict[int, List[Dict[str, Any]]]:
-    artifact_path = UNIT_CLUSTER_ARTIFACT_DIR / "unit_clusters.json"
+@lru_cache(maxsize=4)
+def _unit_cluster_terms(
+    artifact_dir: Path = UNIT_CLUSTER_ARTIFACT_DIR,
+) -> Dict[int, List[Dict[str, Any]]]:
+    artifact_path = Path(artifact_dir) / "unit_clusters.json"
     artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
     return {
         int(row["unit_cluster_id"]): list(row.get("function_terms", []))
@@ -492,8 +528,10 @@ def _unit_cluster_terms() -> Dict[int, List[Dict[str, Any]]]:
     }
 
 
-def _enrichment_rows(unit_clusters: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    function_map = _unit_cluster_terms()
+def _enrichment_rows(
+    unit_clusters: List[Dict[str, Any]], artifact_dir: Path = UNIT_CLUSTER_ARTIFACT_DIR
+) -> List[Dict[str, Any]]:
+    function_map = _unit_cluster_terms(Path(artifact_dir))
     matched = []
     for cluster in unit_clusters:
         matches = function_map.get(int(cluster["prototype_id"]), [])[:5]
@@ -684,48 +722,134 @@ def _build_structure_html(
             ></iframe>
         </div>
         """
+
+
+def adjusted_rand_index(labels_a: List[int], labels_b: List[int]) -> float:
+    """Adjusted Rand index between two residue partitions of equal length."""
+    if len(labels_a) != len(labels_b):
+        raise ValueError("Partitions must cover the same residues.")
+    n = len(labels_a)
+    if n < 2:
+        return 1.0
+
+    def pairs(count: int) -> float:
+        return count * (count - 1) / 2
+
+    contingency: Dict[Tuple[int, int], int] = {}
+    for a, b in zip(labels_a, labels_b):
+        contingency[(a, b)] = contingency.get((a, b), 0) + 1
+    rows: Dict[int, int] = {}
+    cols: Dict[int, int] = {}
+    for (a, b), count in contingency.items():
+        rows[a] = rows.get(a, 0) + count
+        cols[b] = cols.get(b, 0) + count
+    index = sum(pairs(count) for count in contingency.values())
+    row_sum = sum(pairs(count) for count in rows.values())
+    col_sum = sum(pairs(count) for count in cols.values())
+    expected = row_sum * col_sum / pairs(n)
+    maximum = (row_sum + col_sum) / 2
+    if maximum == expected:
+        return 1.0
+    return (index - expected) / (maximum - expected)
+
+
+def compare_model_outputs(output_a: Dict[str, Any], output_b: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize how two models partition the residues they both assign."""
+    units_a = {row["residue"]: row["unit_id"] for row in output_a.get("assignments", [])}
+    units_b = {row["residue"]: row["unit_id"] for row in output_b.get("assignments", [])}
+    shared = [residue for residue in units_a if residue in units_b]
+    return {
+        "shared_residues": len(shared),
+        "units_a": len(output_a.get("units", [])),
+        "units_b": len(output_b.get("units", [])),
+        "adjusted_rand_index": (
+            adjusted_rand_index([units_a[r] for r in shared], [units_b[r] for r in shared])
+            if shared
+            else None
+        ),
+    }
+
+
+def _comparison_html(comparison: Dict[str, Any], name_a: str, name_b: str) -> str:
+    ari = comparison.get("adjusted_rand_index")
+    ari_text = "n/a" if ari is None else f"{ari:.3f}"
+    return (
+        "<div style='font-family:sans-serif'>"
+        f"<p><b>Units</b>: {html_utils.escape(name_a)} = {comparison['units_a']}, "
+        f"{html_utils.escape(name_b)} = {comparison['units_b']}</p>"
+        f"<p><b>Adjusted Rand index</b> over {comparison['shared_residues']} shared residues: "
+        f"{ari_text}</p>"
+        "<p style='color:#666;font-size:0.9em'>Unit IDs and colors are local to each model, and "
+        "cluster IDs come from each model's own K1024 inventory, so colors do not correspond "
+        "across panels.</p></div>"
+    )
+
+
 def create_app() -> Any:
     os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
     import gradio as gr
 
+    placeholder = "<p>Run the analysis first.</p>"
+
     def run_pipeline(
         pdb_file: str | None,
         esm_embeddings_file: str | None,
-        esm_mode: str,
         chain: str,
         structure_display: str,
-    ) -> Tuple[Any, Any, Any, str, str, Dict[str, Any]]:
+        model_a: str,
+        esm_mode_a: str,
+        model_b: str,
+        esm_mode_b: str,
+    ) -> Tuple[Any, ...]:
         if pdb_file is None:
-            return None, None, None, "Please upload a structure first.", "", {}
+            return (None,) * 5 + ("Please upload a structure first.", "", {})
 
         structure = parse_pdb_structure(pdb_file)
-        model_output = run_puffin(
-            pdb_file,
-            chain=chain,
-            esm_embeddings_path=esm_embeddings_file,
-            esm_mode=esm_mode,
-        )
-        payload = {"structure": structure, **model_output}
-        table_html = _results_table_html(payload, "Units")
+        outputs = {}
+        for side, name, esm_mode in (("a", model_a, esm_mode_a), ("b", model_b, esm_mode_b)):
+            spec = MODEL_REGISTRY[name]
+            try:
+                outputs[side] = run_puffin(
+                    pdb_file,
+                    chain=chain,
+                    checkpoint_path=spec["checkpoint"],
+                    esm_embeddings_path=esm_embeddings_file,
+                    esm_mode=esm_mode,
+                    artifact_dir=spec["artifact_dir"],
+                )
+            except (FileNotFoundError, ValueError) as error:
+                raise gr.Error(f"{name}: {error}") from error
+            outputs[side]["model_name"] = name
+
+        selected_chain = outputs["a"]["chain"]
         run_id = uuid.uuid4().hex
         run_dir = RESULTS_ROOT / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
-        payload["run_id"] = run_id
-        payload["result_directory"] = str(run_dir)
         input_path = run_dir / "input.pdb"
         input_path.write_bytes(Path(pdb_file).read_bytes())
-        payload["structure"]["path"] = str(input_path)
-        canonical_path = run_dir / f"{_chain_file_stem(pdb_file, model_output['chain'])}.pdb"
-        canonicalize_pdb_chain(input_path, canonical_path, model_output["chain"])
-        payload["canonical_pdb"] = str(canonical_path)
+        structure["path"] = str(input_path)
+        canonical_path = run_dir / f"{_chain_file_stem(pdb_file, selected_chain)}.pdb"
+        canonicalize_pdb_chain(input_path, canonical_path, selected_chain)
+        payload = {
+            "structure": structure,
+            "chain": selected_chain,
+            "models": outputs,
+            "comparison": compare_model_outputs(outputs["a"], outputs["b"]),
+            "run_id": run_id,
+            "result_directory": str(run_dir),
+            "canonical_pdb": str(canonical_path),
+        }
         results_text = build_download_payload(payload)
         results_path = run_dir / "results.json"
         results_path.write_text(results_text, encoding="utf-8")
 
+        structure_a, table_a, structure_b, table_b = render_views(payload, "Units", structure_display)
         return (
-            _build_structure_html(payload, "Units", structure_display),
-            table_html,
-            results_text,
+            structure_a,
+            table_a,
+            structure_b,
+            table_b,
+            _comparison_html(payload["comparison"], model_a, model_b),
             "Analysis complete",
             str(results_path),
             payload,
@@ -735,17 +859,27 @@ def create_app() -> Any:
         payload: Dict[str, Any],
         unit_view: str,
         structure_display: str,
-    ) -> Tuple[str, str]:
+    ) -> Tuple[str, str, str, str]:
         if not payload:
-            return "<p>Run the analysis first.</p>", "<p>Run the analysis first.</p>"
-        return (
-            _build_structure_html(payload, unit_view, structure_display),
-            _results_table_html(payload, unit_view),
-        )
+            return (placeholder,) * 4
+        views = []
+        for side in ("a", "b"):
+            model_payload = {"structure": payload["structure"], **payload["models"][side]}
+            views += [
+                _build_structure_html(model_payload, unit_view, structure_display),
+                _results_table_html(model_payload, unit_view),
+            ]
+        return tuple(views)
+
+    def default_esm_mode(model_name: str) -> Any:
+        return gr.update(value=MODEL_REGISTRY[model_name]["esm_mode"])
 
     with gr.Blocks(theme=gr.themes.Soft()) as demo:
-        gr.Markdown("# Protein Unit Explorer")
-        gr.Markdown("Upload a protein structure to inspect predicted units and associated GO enrichment terms.")
+        gr.Markdown("# Protein Unit Explorer: model comparison")
+        gr.Markdown(
+            "Upload a protein structure to compare the units and GO enrichment terms "
+            "predicted by two PUFFIN checkpoints."
+        )
 
         with gr.Row():
             with gr.Column(scale=1):
@@ -755,66 +889,65 @@ def create_app() -> Any:
                     label="Precomputed ESM-1b embeddings (optional .pt/.pth)",
                     file_types=[".pt", ".pth"],
                 )
-                esm_mode_input = gr.Radio(
-                    ["Legacy zero embeddings", "Uploaded embeddings", "Compute ESM"],
-                    value="Legacy zero embeddings",
-                    label="ESM mode",
-                    info=(
-                        "Legacy mode reproduces the historical assignments using zero ESM "
-                        "features."
-                    ),
-                )
                 gr.Markdown(
                     "Upload format: a tensor `[N, 1280]`, or the dictionary produced by "
-                    "`src/esm_embed.py` with `embeddings` and `index`. The file is used only "
-                    "in **Uploaded embeddings** mode."
+                    "`src/esm_embed.py` with `embeddings` and `index`. The file is used by "
+                    "any model set to **Uploaded embeddings**."
                 )
                 chain_input = gr.Textbox(value="", label="Chain (blank = first chain)")
-                run_btn = gr.Button("Run analysis")
-                download_file = gr.File(label="Downloadable results")
-
-            with gr.Column(scale=2):
-                gr.Markdown("## 3D structure")
                 structure_display = gr.Radio(
                     ["Selected chain only", "Full PDB (other chains gray)"],
                     value="Selected chain only",
-                    show_label=False,
+                    label="Structure display",
                 )
-                structure_view = gr.HTML(value="<p>Upload a file to inspect the structure.</p>")
-
-            with gr.Column(scale=1):
-                gr.Markdown("## Predicted units")
-                view_mode = gr.Radio(
-                    ["Units", "Unit clusters"],
-                    value="Units",
-                    show_label=False,
-                )
-                results_table = gr.HTML(value="<p>Run the analysis to see predicted units here.</p>")
-                results_json = gr.Textbox(label="Analysis output", lines=10, visible=False)
+                view_mode = gr.Radio(["Units", "Unit clusters"], value="Units", label="Color by")
+                run_btn = gr.Button("Run analysis")
                 status = gr.Textbox(label="Status", value="Waiting for input")
+                comparison_view = gr.HTML(value="")
+                download_file = gr.File(label="Downloadable results")
                 results_state = gr.State({})
 
+            model_panels = []
+            for title, default_model in (("Model A", DEFAULT_MODEL_A), ("Model B", DEFAULT_MODEL_B)):
+                with gr.Column(scale=2):
+                    gr.Markdown(f"## {title}")
+                    model_input = gr.Dropdown(
+                        list(MODEL_REGISTRY), value=default_model, label="Checkpoint"
+                    )
+                    esm_mode_input = gr.Radio(
+                        ESM_MODES,
+                        value=MODEL_REGISTRY[default_model]["esm_mode"],
+                        label="ESM mode",
+                    )
+                    structure_view = gr.HTML(value="<p>Upload a file to inspect the structure.</p>")
+                    results_table = gr.HTML(value="<p>Run the analysis to see predicted units here.</p>")
+                model_input.change(fn=default_esm_mode, inputs=model_input, outputs=esm_mode_input)
+                model_panels.append((model_input, esm_mode_input, structure_view, results_table))
+
+        (model_a, esm_mode_a, structure_a, table_a), (model_b, esm_mode_b, structure_b, table_b) = (
+            model_panels
+        )
+        view_outputs = [structure_a, table_a, structure_b, table_b]
         run_btn.click(
             fn=run_pipeline,
             inputs=[
                 pdb_input,
                 esm_embeddings_input,
-                esm_mode_input,
                 chain_input,
                 structure_display,
+                model_a,
+                esm_mode_a,
+                model_b,
+                esm_mode_b,
             ],
-            outputs=[structure_view, results_table, results_json, status, download_file, results_state],
+            outputs=view_outputs + [comparison_view, status, download_file, results_state],
         )
-        view_mode.change(
-            fn=render_views,
-            inputs=[results_state, view_mode, structure_display],
-            outputs=[structure_view, results_table],
-        )
-        structure_display.change(
-            fn=render_views,
-            inputs=[results_state, view_mode, structure_display],
-            outputs=[structure_view, results_table],
-        )
+        for control in (view_mode, structure_display):
+            control.change(
+                fn=render_views,
+                inputs=[results_state, view_mode, structure_display],
+                outputs=view_outputs,
+            )
 
     return demo
 
