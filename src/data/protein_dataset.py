@@ -41,6 +41,16 @@ verbose(False)
 import copy
 import torch
 
+def _upper_pdb_code(protein_id: str) -> str:
+    """Upper-case only the 4-letter PDB code, leaving a chain suffix untouched.
+
+    Embedding files are named e.g. ``5GMK-d.pt``: the code is upper-case but the
+    chain keeps its original case.
+    """
+    pdb, sep, rest = protein_id.partition("-")
+    return f"{pdb.upper()}-{rest}" if sep else protein_id.upper()
+
+
 class ProteinDataset(Dataset):
 
     def __init__(
@@ -77,6 +87,7 @@ class ProteinDataset(Dataset):
         self.store_het = store_het
         self.out_names = out_names
         self.esm_embedding_dir = Path(esm_embedding_dir)
+        self._missing_embeddings = set()
         self._processed_files = []
 
         # Determine whether to download raw structures
@@ -204,13 +215,53 @@ class ProteinDataset(Dataset):
         else:
             return [f"{pdb}.pt" for pdb in self.pdb_codes]
 
-    def load_esm_embeddings(self, protein_id: str) -> torch.Tensor:
-        """Loads ESM embeddings for a given protein ID."""
-        embedding_path = self.esm_embedding_dir / f"{protein_id}.pt"
-        if not embedding_path.exists():
-            #logger.info(f"ESM embedding for {protein_id} not found: {embedding_path}")
-            return None
-        return torch.load(embedding_path)
+    def _embedding_key_candidates(self, idx: int, fname_key: str) -> List[str]:
+        """Candidate basenames for this example's cached ESM embedding.
+
+        Embedding files are named with the upper-case PDB code plus chain
+        (``11AS-A.pt``). Callers use two id conventions: the GO datamodule
+        passes a lower-cased 4-letter code with a separate chain, while
+        ``cluster.py`` passes an id that already carries the chain.
+        """
+        keys: List[str] = []
+        if self.out_names is not None:
+            keys.append(str(self.out_names[idx]))
+        code = str(self.pdb_codes[idx])
+        chain = str(self.chains[idx]) if self.chains is not None else None
+        if chain and chain != "all" and not code.upper().endswith(f"-{chain.upper()}"):
+            keys.append(f"{_upper_pdb_code(code)}-{chain}")
+        keys.append(_upper_pdb_code(code))
+        keys.append(code)
+        keys.append(fname_key)
+        seen = set()
+        return [k for k in keys if not (k in seen or seen.add(k))]
+
+    def load_esm_embeddings(self, protein_id) -> Optional[Dict[str, Any]]:
+        """Loads ESM embeddings, trying each candidate basename in turn.
+
+        A miss is logged rather than silently falling back to the zero
+        embeddings set in ``_batch_format``.
+        """
+        if isinstance(protein_id, str):
+            keys = [protein_id]
+            pdb, sep, chain = protein_id.partition("-")
+            if sep:
+                keys.insert(0, f"{pdb.upper()}-{chain}")
+        else:
+            keys = list(protein_id)
+        for key in keys:
+            embedding_path = self.esm_embedding_dir / f"{key}.pt"
+            if embedding_path.exists():
+                return torch.load(embedding_path)
+        label = keys[0] if keys else str(protein_id)
+        if label not in self._missing_embeddings:
+            self._missing_embeddings.add(label)
+            logger.warning(
+                f"ESM embedding not found for {label} (tried {keys}) in "
+                f"{self.esm_embedding_dir}; using zeros "
+                f"({len(self._missing_embeddings)} missing so far)"
+            )
+        return None
 
     def process(self):
         """Process raw data into PyTorch Geometric Data objects with Graphein.
@@ -324,7 +375,7 @@ class ProteinDataset(Dataset):
         if '_' in fname: 
             fname = fname.replace('_', '-')
             
-        data = self.load_esm_embeddings(fname)
+        data = self.load_esm_embeddings(self._embedding_key_candidates(idx, fname))
         #print(fname, data)
         if data is not None:
              batch.esm_embeddings = data["embeddings"]
