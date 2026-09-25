@@ -22,6 +22,14 @@ from proteinworkshop.features.sequence_features import amino_acid_one_hot
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPO_ID = "lifelu/puffin"
 DEFAULT_ESM_MODEL_PATH = Path("/cta/share/users/esm/ESM-1b")
+ESM_DIM = 1280
+# Encoder settings of the released checkpoint. configs/encoder/puffin.yaml
+# defaults to 256-d projections with cat fusion, which cannot load it.
+RELEASE_ENCODER_OVERRIDES = [
+    "encoder.esm_embed_dim=512",
+    "encoder.input_feat_dim=512",
+    "encoder.fuse_lm_method=sum",
+]
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -78,6 +86,16 @@ def parse_args() -> argparse.Namespace:
             "Local ESM model identifier/path used to instantiate the ESM module. "
             "The ESM weights are loaded from the PUFFIN checkpoint. "
             f"Default: {DEFAULT_ESM_MODEL_PATH}."
+        ),
+    )
+    parser.add_argument(
+        "--esm-features",
+        choices=["zero", "computed"],
+        default="zero",
+        help=(
+            "ESM-1b input features. 'zero' reproduces the released lifelu/puffin "
+            "model, which was trained with zeroed ESM features; 'computed' runs "
+            "ESM-1b for checkpoints trained with real embeddings. Default: zero."
         ),
     )
     parser.add_argument(
@@ -198,8 +216,18 @@ def build_cfg(args: argparse.Namespace, ckpt_path: Path, work_dir: Path):
         f"env.paths.runs={hydra_path(work_dir / 'runs')}",
         "cluster.pdb_dir=.",
         "cluster.esm_embedding_dir=.",
-        f"encoder.esm_model_path={hydra_path(args.esm_model_path)}",
+        (
+            f"encoder.esm_model_path={hydra_path(args.esm_model_path)}"
+            if args.esm_features == "computed"
+            else "encoder.esm_model_path=null"
+        ),
     ]
+    user_keys = {override.split("=", 1)[0] for override in args.override}
+    overrides.extend(
+        override
+        for override in RELEASE_ENCODER_OVERRIDES
+        if override.split("=", 1)[0] not in user_keys
+    )
     overrides.extend(args.override)
 
     with initialize_config_dir(config_dir=str(REPO_ROOT / "configs"), version_base="1.3"):
@@ -403,6 +431,10 @@ def run_inference(args: argparse.Namespace) -> None:
 
     cfg = build_cfg(args, ckpt_path, cache_root)
     batch = build_batch(args.pdb, args.chain)
+    if args.esm_features == "zero":
+        n_residues = len(batch.to_data_list()[0].residue_id)
+        batch.esm_embeddings = torch.zeros((n_residues, ESM_DIM), dtype=torch.float32)
+        batch.esm_id = batch.residue_id
 
     model = load_model(cfg, copy.deepcopy(batch), device=device)
     model.eval()

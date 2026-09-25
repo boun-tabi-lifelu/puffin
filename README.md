@@ -255,7 +255,9 @@ python scripts/infer_puffin_units.py path/to/protein.pdb \
   --output-dir units/single_pdb/
 ```
 
-The model checkpoint can be overwritten with the `--checkpoint` flag.
+The model checkpoint can be overwritten with the `--checkpoint` flag. The released
+model was trained with zeroed ESM features, so `--esm-features zero` is the default;
+pass `--esm-features computed` for checkpoints trained with real ESM-1b embeddings.
 
 To also assign each active PUFFIN unit to a global unit cluster and attach the retained GO functions for that cluster:
 
