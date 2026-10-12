@@ -134,6 +134,11 @@ class DualModel(BenchMarkModel):
         self.temp_end = float(sched.get("temp_end", 0.2))       # sharper
         self.temp_warmup_epochs = int(sched.get("temp_warmup_epochs", self.warmup_epochs))
         self.temp_ramp_epochs = int(sched.get("temp_ramp_epochs", self.ramp_epochs))
+        # Temperature for every non-training pass (validation, test, inference).
+        # It is not temp_end: the published segments and unit-cluster artifacts
+        # were produced at tau=1.0. tau does not change the argmax unit labels,
+        # but it does change the pooled unit embeddings.
+        self.eval_temp = float(sched.get("eval_temp", 1.0))
 
  
         log.info(
@@ -147,8 +152,8 @@ class DualModel(BenchMarkModel):
 
 
     def forward(self, batch: Union[Batch, ProteinBatch], perturbed=False) -> ModelOutput:
-        # temperature schedule only matters during training; for val/test you can freeze at temp_end
-        tau = self._current_temperature() if self.training else self.temp_end
+        # temperature schedule only matters during training; val/test/inference use eval_temp
+        tau = self._current_temperature() if self.training else self.eval_temp
         if hasattr(self.encoder, "assign_temperature"):
             self.encoder.assign_temperature = tau
         else:
@@ -192,7 +197,7 @@ class DualModel(BenchMarkModel):
 
         # scheduled weights
         unit_w = self._current_unit_weight() if self.training else self.unit_weight_max
-        tau = self._current_temperature() if self.training else self.temp_end
+        tau = self._current_temperature() if self.training else self.eval_temp
         # log schedules (once per epoch is also fine)
         self.log("schedule/unit_weight", unit_w, prog_bar=True, on_step=True, on_epoch=True)
         self.log("schedule/temperature", tau, prog_bar=True, on_step=True, on_epoch=True)
@@ -232,7 +237,7 @@ class DualModel(BenchMarkModel):
         skip_flag = torch.zeros((), device=self.device, dtype=torch.bool)
 
         unit_w = self._current_unit_weight() if self.training else self.unit_weight_max
-        tau = self._current_temperature() if self.training else self.temp_end
+        tau = self._current_temperature() if self.training else self.eval_temp
         print(f"Current unit weight: {unit_w}, temperature: {tau}")
 
 

@@ -255,7 +255,19 @@ python scripts/infer_puffin_units.py path/to/protein.pdb \
   --output-dir units/single_pdb/
 ```
 
-The model checkpoint can be overwritten with the `--checkpoint` flag.
+The model checkpoint can be overwritten with the `--checkpoint` flag. The released
+model was trained with zeroed ESM features, so `--esm-features zero` is the default;
+pass `--esm-features computed` for checkpoints trained with real ESM-1b embeddings.
+
+Training and batch extraction also default to zero ESM features. No ESM model
+is loaded and cached embeddings are ignored in this mode. The zero-input
+projection/fusion layers are retained to preserve released-checkpoint behavior.
+For a checkpoint trained with real cached embeddings, explicitly set
+`dataset.datamodule.esm_features=cached` for training or
+`cluster.esm_features=cached` for batch extraction, and set the corresponding
+`esm_embedding_dir`. Keep the encoder dimensions and fusion method consistent
+with that checkpoint. Input feature mode is recorded in inference output metadata.
+
 
 To also assign each active PUFFIN unit to a global unit cluster and attach the retained GO functions for that cluster:
 

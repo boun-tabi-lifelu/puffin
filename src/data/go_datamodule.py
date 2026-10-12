@@ -51,7 +51,8 @@ class GeneOntologyDataset(ProteinDataModule):
         transforms: Optional[Iterable[Callable]] = None,
         overwrite: bool = False, # Whether to overwrite existing files, defaults to
         esm_model_path: str = '/cta/share/users/esm/ESM-1b',
-        esm_embedding_dir: str = None, 
+        esm_embedding_dir: str = None,
+        esm_features: str = "zero",
     ) -> None:
         super().__init__()
         self.pdb_dir = pdb_dir
@@ -73,6 +74,7 @@ class GeneOntologyDataset(ProteinDataModule):
         self.num_workers = num_workers
         self.prepare_data_per_node = True
         self.esm_embedding_dir = esm_embedding_dir
+        self.esm_features = esm_features
 
 
         self.shuffle_labels = shuffle_labels
@@ -166,7 +168,8 @@ class GeneOntologyDataset(ProteinDataModule):
             else self.compose_transforms([self.labeller] + [self.transform]),
             format=self.format,
             in_memory=self.in_memory,
-            esm_embedding_dir=self.esm_embedding_dir
+            esm_embedding_dir=self.esm_embedding_dir,
+            esm_features=self.esm_features,
         )
 
     def train_dataset(self) -> ProteinDataset:

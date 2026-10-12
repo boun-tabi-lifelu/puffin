@@ -73,6 +73,7 @@ class ProteinDataset(Dataset):
         store_het: bool = False,
         out_names: Optional[List[str]] = None,
         esm_embedding_dir: Optional[str] = 'data/esm/ESM-1b',
+        esm_features: str = 'zero',
     ):
         self.pdb_codes = pdb_codes
         self.pdb_dir = pdb_dir
@@ -86,7 +87,12 @@ class ProteinDataset(Dataset):
         self.in_memory = in_memory
         self.store_het = store_het
         self.out_names = out_names
-        self.esm_embedding_dir = Path(esm_embedding_dir)
+        if esm_features not in {"zero", "cached"}:
+            raise ValueError("esm_features must be zero or cached")
+        if esm_features == "cached" and not esm_embedding_dir:
+            raise ValueError("esm_embedding_dir is required for cached ESM features")
+        self.esm_features = esm_features
+        self.esm_embedding_dir = Path(esm_embedding_dir) if esm_embedding_dir else None
         self._missing_embeddings = set()
         self._processed_files = []
 
@@ -242,6 +248,8 @@ class ProteinDataset(Dataset):
         A miss is logged rather than silently falling back to the zero
         embeddings set in ``_batch_format``.
         """
+        if self.esm_features == "zero":
+            return None
         if isinstance(protein_id, str):
             keys = [protein_id]
             pdb, sep, chain = protein_id.partition("-")
@@ -318,10 +326,11 @@ class ProteinDataset(Dataset):
                     keep_insertions=True,
                     store_het=self.store_het,
                 )
-                if self.esm_embedding_dir:
+                if self.esm_features == "cached":
                     emb_data = self.load_esm_embeddings(pdb)
-                    graph.esm_embeddings = emb_data["embeddings"]
-                    graph.esm_id = emb_data["index"]
+                    if emb_data is not None:
+                        graph.esm_embeddings = emb_data["embeddings"]
+                        graph.esm_id = emb_data["index"]
             except Exception as e:
                 logger.error(f"Error processing {pdb} {self.chains[i]}: {e}")  # type: ignore
                 raise e
@@ -355,9 +364,6 @@ class ProteinDataset(Dataset):
         :type idx: int
         :return: PyTorch Geometric Data object.
         """
-        if self.in_memory:
-            return self._batch_format(copy.deepcopy(self.data[idx]))
-
         if self.out_names is not None:
             fname = f"{self.out_names[idx]}.pt"
         elif self.chains is not None:
@@ -365,7 +371,9 @@ class ProteinDataset(Dataset):
         else:
             fname = f"{self.pdb_codes[idx]}.pt"
 
-        batch = self._batch_format(torch.load(Path(self.processed_dir) / fname))
+        graph = (copy.deepcopy(self.data[idx]) if self.in_memory
+                 else torch.load(Path(self.processed_dir) / fname))
+        batch = self._batch_format(graph)
         # TODO: check fname
 
         # pdb, chain = fname.replace('.pt', '').split('_')
