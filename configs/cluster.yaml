@@ -40,6 +40,7 @@ cluster:
   pdb_dir: ${env.paths.data}/GeneOntology/pdb/
   output_file: pdb_${cluster.split}
   model:  dual_model # unsupervised_model, baseline_model 
+  esm_features: zero # cached explicitly enables precomputed ESM inputs.
   esm_embedding_dir: ${env.paths.data}/esm/ESM-1b
 
 # passing checkpoint path is necessary for evaluation

@@ -12,6 +12,7 @@ datamodule:
   transforms: ${transforms} # Transforms to apply to dataset examples
   overwrite: False # Whether to overwrite existing dataset files
   in_memory: False #True
+  esm_features: zero # Set to cached only for checkpoints trained with ESM.
   esm_embedding_dir: ${env.paths.data}/esm/ESM-1b
 
 num_classes: 1943 # Number of classes

@@ -24,7 +24,7 @@ DEFAULT_REPO_ID = "lifelu/puffin"
 DEFAULT_ESM_MODEL_PATH = Path("/cta/share/users/esm/ESM-1b")
 ESM_DIM = 1280
 # Encoder settings of the released checkpoint. configs/encoder/puffin.yaml
-# defaults to 256-d projections with cat fusion, which cannot load it.
+# matches these defaults; keep explicit overrides for release inference.
 RELEASE_ENCODER_OVERRIDES = [
     "encoder.esm_embed_dim=512",
     "encoder.input_feat_dim=512",
@@ -598,7 +598,9 @@ def run_inference(args: argparse.Namespace) -> None:
             "embeddings": seg_embeddings[0],
             "seg_mask": seg_mask[0],
             "checkpoint": str(ckpt_path),
-            "esm_model_path": hydra_path(args.esm_model_path),
+            "esm_features": args.esm_features,
+            "esm_model_path": (hydra_path(args.esm_model_path)
+                               if args.esm_features == "computed" else None),
             "pdb": str(args.pdb),
             "chain": args.chain,
             "unit_cluster_artifact": (
