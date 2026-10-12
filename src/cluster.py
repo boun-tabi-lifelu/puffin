@@ -414,7 +414,11 @@ def run_model(cfg: omegaconf.DictConfig, dataloader: ProteinDataLoader) -> RunOu
     model.eval().to(device)
     extractor: SegmentExtractor = ModelExtractor()
 
-    run_meta = {"encoder": str(cfg.get("encoder", "unknown")), "ckpt_path": str(cfg.get("ckpt_path", ""))}
+    run_meta = {
+        "encoder": str(cfg.get("encoder", "unknown")),
+        "ckpt_path": str(cfg.get("ckpt_path", "")),
+        "esm_features": str(cfg.cluster.get("esm_features", "zero")),
+    }
 
     residue_rows: List[Dict[str, Any]] = []
     segment_rows: List[Dict[str, Any]] = []
@@ -558,6 +562,7 @@ def build_dataset(cfg: omegaconf.DictConfig, df: pd.DataFrame) -> ProteinDataset
         format="pdb",
         in_memory=False,
         esm_embedding_dir=cfg.cluster.esm_embedding_dir,
+        esm_features=cfg.cluster.get("esm_features", "zero"),
     )
 
 

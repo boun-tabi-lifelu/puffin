@@ -56,7 +56,7 @@ class ESMHandler(nn.Module):
 
         if self.esm_model_path:
             self._setup_esm_model()
-            self._setup_projection_layers()
+        self._setup_projection_layers()
 
     def _setup_esm_model(self) -> None:
         model_path = Path(self.esm_model_path)
@@ -74,8 +74,6 @@ class ESMHandler(nn.Module):
             self.lm_proj = LazyLinear(self.esm_embed_dim)
 
         if not self.use_only_esm:
-            # IMPORTANT: you may want to revisit feat_proj sizing.
-            # Keeping your original logic.
             if self.input_feat_dim:
                 self.feat_proj = LazyLinear(self.input_feat_dim)
             elif self.fuse_lm_method == FusionMethod.SUM:

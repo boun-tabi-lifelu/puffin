@@ -41,6 +41,16 @@ verbose(False)
 import copy
 import torch
 
+def _upper_pdb_code(protein_id: str) -> str:
+    """Upper-case only the 4-letter PDB code, leaving a chain suffix untouched.
+
+    Embedding files are named e.g. ``5GMK-d.pt``: the code is upper-case but the
+    chain keeps its original case.
+    """
+    pdb, sep, rest = protein_id.partition("-")
+    return f"{pdb.upper()}-{rest}" if sep else protein_id.upper()
+
+
 class ProteinDataset(Dataset):
 
     def __init__(
@@ -63,6 +73,7 @@ class ProteinDataset(Dataset):
         store_het: bool = False,
         out_names: Optional[List[str]] = None,
         esm_embedding_dir: Optional[str] = 'data/esm/ESM-1b',
+        esm_features: str = 'zero',
     ):
         self.pdb_codes = pdb_codes
         self.pdb_dir = pdb_dir
@@ -76,7 +87,13 @@ class ProteinDataset(Dataset):
         self.in_memory = in_memory
         self.store_het = store_het
         self.out_names = out_names
-        self.esm_embedding_dir = Path(esm_embedding_dir)
+        if esm_features not in {"zero", "cached"}:
+            raise ValueError("esm_features must be zero or cached")
+        if esm_features == "cached" and not esm_embedding_dir:
+            raise ValueError("esm_embedding_dir is required for cached ESM features")
+        self.esm_features = esm_features
+        self.esm_embedding_dir = Path(esm_embedding_dir) if esm_embedding_dir else None
+        self._missing_embeddings = set()
         self._processed_files = []
 
         # Determine whether to download raw structures
@@ -204,13 +221,55 @@ class ProteinDataset(Dataset):
         else:
             return [f"{pdb}.pt" for pdb in self.pdb_codes]
 
-    def load_esm_embeddings(self, protein_id: str) -> torch.Tensor:
-        """Loads ESM embeddings for a given protein ID."""
-        embedding_path = self.esm_embedding_dir / f"{protein_id}.pt"
-        if not embedding_path.exists():
-            #logger.info(f"ESM embedding for {protein_id} not found: {embedding_path}")
+    def _embedding_key_candidates(self, idx: int, fname_key: str) -> List[str]:
+        """Candidate basenames for this example's cached ESM embedding.
+
+        Embedding files are named with the upper-case PDB code plus chain
+        (``11AS-A.pt``). Callers use two id conventions: the GO datamodule
+        passes a lower-cased 4-letter code with a separate chain, while
+        ``cluster.py`` passes an id that already carries the chain.
+        """
+        keys: List[str] = []
+        if self.out_names is not None:
+            keys.append(str(self.out_names[idx]))
+        code = str(self.pdb_codes[idx])
+        chain = str(self.chains[idx]) if self.chains is not None else None
+        if chain and chain != "all" and not code.upper().endswith(f"-{chain.upper()}"):
+            keys.append(f"{_upper_pdb_code(code)}-{chain}")
+        keys.append(_upper_pdb_code(code))
+        keys.append(code)
+        keys.append(fname_key)
+        seen = set()
+        return [k for k in keys if not (k in seen or seen.add(k))]
+
+    def load_esm_embeddings(self, protein_id) -> Optional[Dict[str, Any]]:
+        """Loads ESM embeddings, trying each candidate basename in turn.
+
+        A miss is logged rather than silently falling back to the zero
+        embeddings set in ``_batch_format``.
+        """
+        if self.esm_features == "zero":
             return None
-        return torch.load(embedding_path)
+        if isinstance(protein_id, str):
+            keys = [protein_id]
+            pdb, sep, chain = protein_id.partition("-")
+            if sep:
+                keys.insert(0, f"{pdb.upper()}-{chain}")
+        else:
+            keys = list(protein_id)
+        for key in keys:
+            embedding_path = self.esm_embedding_dir / f"{key}.pt"
+            if embedding_path.exists():
+                return torch.load(embedding_path)
+        label = keys[0] if keys else str(protein_id)
+        if label not in self._missing_embeddings:
+            self._missing_embeddings.add(label)
+            logger.warning(
+                f"ESM embedding not found for {label} (tried {keys}) in "
+                f"{self.esm_embedding_dir}; using zeros "
+                f"({len(self._missing_embeddings)} missing so far)"
+            )
+        return None
 
     def process(self):
         """Process raw data into PyTorch Geometric Data objects with Graphein.
@@ -267,10 +326,11 @@ class ProteinDataset(Dataset):
                     keep_insertions=True,
                     store_het=self.store_het,
                 )
-                if self.esm_embedding_dir:
+                if self.esm_features == "cached":
                     emb_data = self.load_esm_embeddings(pdb)
-                    graph.esm_embeddings = emb_data["embeddings"]
-                    graph.esm_id = emb_data["index"]
+                    if emb_data is not None:
+                        graph.esm_embeddings = emb_data["embeddings"]
+                        graph.esm_id = emb_data["index"]
             except Exception as e:
                 logger.error(f"Error processing {pdb} {self.chains[i]}: {e}")  # type: ignore
                 raise e
@@ -304,9 +364,6 @@ class ProteinDataset(Dataset):
         :type idx: int
         :return: PyTorch Geometric Data object.
         """
-        if self.in_memory:
-            return self._batch_format(copy.deepcopy(self.data[idx]))
-
         if self.out_names is not None:
             fname = f"{self.out_names[idx]}.pt"
         elif self.chains is not None:
@@ -314,7 +371,9 @@ class ProteinDataset(Dataset):
         else:
             fname = f"{self.pdb_codes[idx]}.pt"
 
-        batch = self._batch_format(torch.load(Path(self.processed_dir) / fname))
+        graph = (copy.deepcopy(self.data[idx]) if self.in_memory
+                 else torch.load(Path(self.processed_dir) / fname))
+        batch = self._batch_format(graph)
         # TODO: check fname
 
         # pdb, chain = fname.replace('.pt', '').split('_')
@@ -324,7 +383,7 @@ class ProteinDataset(Dataset):
         if '_' in fname: 
             fname = fname.replace('_', '-')
             
-        data = self.load_esm_embeddings(fname)
+        data = self.load_esm_embeddings(self._embedding_key_candidates(idx, fname))
         #print(fname, data)
         if data is not None:
              batch.esm_embeddings = data["embeddings"]

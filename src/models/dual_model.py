@@ -99,61 +99,52 @@ class DualModel(BenchMarkModel):
 
     - Function prediction loss (e.g., multilabel GO classification)
     - Unit/cluster prediction loss (e.g., MinCut pooling)
-    - Mutual information loss via InfoNCE between segments and GO terms
-    - Entropy-based regularization to encourage sharp yet diverse cluster usage
     """
 
     def __init__(self,
                  cfg: DictConfig,
-                 function_weight: float = 0.8,
+                 function_weight: float = 0.9,
                  unit_weight: float = 0.1,
-                 mutual_weight: float = 0.1,
-                 mutual_temp: float = 0.7,
-                 entropy_weight: float = 0.0,
-                 entropy_alpha: float = 1.0,
-                 entropy_beta: float = 0.3) -> None:
+                ) -> None:
         """
         Args:
             cfg (DictConfig): Hydra configuration object.
             function_weight (float): Weight of function classification loss.
             unit_weight (float): Weight of unit (segment) loss like MinCut.
-            mutual_weight (float): Weight of InfoNCE mutual information loss.
-            mutual_temp (float): Temperature for InfoNCE loss.
-            entropy_weight (float): Weight of entropy regularization loss.
-            entropy_alpha (float): Sharpness term coefficient (minimize entropy per node).
-            entropy_beta (float): Diversity term coefficient (maximize entropy across clusters).
         """
         super().__init__(cfg)
 
         self.function_weight = float(function_weight)
         self.unit_weight = float(unit_weight)
-        self.mutual_weight = float(mutual_weight)
-        self.entropy_weight = float(entropy_weight)
-
-        self.entropy_alpha = float(entropy_alpha)
-        self.entropy_beta = float(entropy_beta)
-
-        self.segment_info_nce = SegmentInfoNCELoss(temperature=mutual_temp)
 
         # ---- Schedules ----
-        self.unit_weight_min = float(cfg.get("schedule.unit_weight_min", 0.0))
-        self.unit_weight_max = float(cfg.get("schedule.unit_weight_max", self.unit_weight))
+        # NOTE: these were previously read as cfg.get("schedule.temp_end", ...),
+        # i.e. a literal dotted key that OmegaConf never resolves, so the defaults
+        # were the only reachable values. Read the nested `schedule` group instead;
+        # with no `schedule` in the config the defaults below are unchanged.
+        sched = cfg.get("schedule", None) or {}
 
-        self.warmup_epochs = int(cfg.get("schedule.warmup_epochs", 5))
-        self.ramp_epochs = int(cfg.get("schedule.ramp_epochs", 10))
+        self.unit_weight_min = float(sched.get("unit_weight_min", 0.10))
+        self.unit_weight_max = float(sched.get("unit_weight_max", self.unit_weight))
 
-        self.temp_start = float(cfg.get("schedule.temp_start", 2.0))   # softer
-        self.temp_end = float(cfg.get("schedule.temp_end", 1.0))       # sharper
-        self.temp_warmup_epochs = int(cfg.get("schedule.temp_warmup_epochs", self.warmup_epochs))
-        self.temp_ramp_epochs = int(cfg.get("schedule.temp_ramp_epochs", self.ramp_epochs))
+        self.warmup_epochs = int(sched.get("warmup_epochs", 3))
+        self.ramp_epochs = int(sched.get("ramp_epochs", 2))
+
+        self.temp_start = float(sched.get("temp_start", 1.0))   # softer
+        self.temp_end = float(sched.get("temp_end", 0.2))       # sharper
+        self.temp_warmup_epochs = int(sched.get("temp_warmup_epochs", self.warmup_epochs))
+        self.temp_ramp_epochs = int(sched.get("temp_ramp_epochs", self.ramp_epochs))
+        # Temperature for every non-training pass (validation, test, inference).
+        # It is not temp_end: the published segments and unit-cluster artifacts
+        # were produced at tau=1.0. tau does not change the argmax unit labels,
+        # but it does change the pooled unit embeddings.
+        self.eval_temp = float(sched.get("eval_temp", 1.0))
 
  
         log.info(
             f"Training with a mixture of objectives: "
             f"function_weight={self.function_weight}, "
             f"unit_weight={self.unit_weight}, "
-            f"mutual_weight={self.mutual_weight}, "
-            f"entropy_weight={self.entropy_weight}"
             f" (unit weight schedule: {self.unit_weight_min} -> {self.unit_weight_max} over "
             f"{self.warmup_epochs + self.ramp_epochs} epochs)"
         )
@@ -161,8 +152,8 @@ class DualModel(BenchMarkModel):
 
 
     def forward(self, batch: Union[Batch, ProteinBatch], perturbed=False) -> ModelOutput:
-        # temperature schedule only matters during training; for val/test you can freeze at temp_end
-        tau = self._current_temperature() if self.training else self.temp_end
+        # temperature schedule only matters during training; val/test/inference use eval_temp
+        tau = self._current_temperature() if self.training else self.eval_temp
         if hasattr(self.encoder, "assign_temperature"):
             self.encoder.assign_temperature = tau
         else:
@@ -170,18 +161,6 @@ class DualModel(BenchMarkModel):
             setattr(self.encoder, "assign_temperature", tau)
 
         output: EncoderOutput = self.encoder(batch, perturbed)
-
-        # assume you returned it in EncoderOutput:
-        # seg_diag = output.get("seg_diag", None)
-        # seg_flags = output.get("seg_flags", None)
-
-        # if seg_diag is not None:
-        #     for k, v in seg_diag.items():
-        #         self.log(k, v, prog_bar=False, on_step=True, on_epoch=True, batch_size=batch.num_graphs)
-
-        # if seg_flags is not None:
-        #     for k, v in seg_flags.items():
-        #         self.log(f"seg/{k}", v, prog_bar=True, on_step=True, on_epoch=True, batch_size=batch.num_graphs)
 
 
         output = self.transform_encoder_output(output, batch)
@@ -218,7 +197,7 @@ class DualModel(BenchMarkModel):
 
         # scheduled weights
         unit_w = self._current_unit_weight() if self.training else self.unit_weight_max
-        tau = self._current_temperature() if self.training else self.temp_end
+        tau = self._current_temperature() if self.training else self.eval_temp
         # log schedules (once per epoch is also fine)
         self.log("schedule/unit_weight", unit_w, prog_bar=True, on_step=True, on_epoch=True)
         self.log("schedule/temperature", tau, prog_bar=True, on_step=True, on_epoch=True)
@@ -227,7 +206,7 @@ class DualModel(BenchMarkModel):
         y = self.get_labels(batch)
 
         # Forward pass: output includes graph prediction, graph embeddings, segment embeddings, mincut losses, entropy terms
-        y_hat, g_feat, seg_feat, mc_losses, entropy_loss = self(batch)
+        y_hat, g_feat, seg_feat, mc_losses, _ = self(batch)
 
         # Compute supervised function prediction loss
         loss = self.compute_loss(y_hat, y)
@@ -244,19 +223,6 @@ class DualModel(BenchMarkModel):
             loss["total_mc_loss"] = total_mc_loss
             total_loss += unit_w * total_mc_loss
 
-        # Segment entropy regularization
-        # if self.entropy_weight != 0:
-        #     entropy_sharpness, entropy_diversity = entropy_loss
-        #     entropy_reg = self.entropy_alpha * entropy_sharpness - self.entropy_beta * entropy_diversity
-        #     loss["segment_entropy"] = entropy_reg
-        #     total_loss += self.entropy_weight * entropy_reg
-
-        # # InfoNCE mutual information loss
-        # if self.mutual_weight != 0:
-        #     mutual_loss = self.segment_info_nce(seg_feat, y["graph_label"].float())
-        #     loss["segment_info_nce"] = mutual_loss
-        #     total_loss += self.mutual_weight * mutual_loss
-
         # Final loss
         loss["total"] = total_loss
 
@@ -271,7 +237,7 @@ class DualModel(BenchMarkModel):
         skip_flag = torch.zeros((), device=self.device, dtype=torch.bool)
 
         unit_w = self._current_unit_weight() if self.training else self.unit_weight_max
-        tau = self._current_temperature() if self.training else self.temp_end
+        tau = self._current_temperature() if self.training else self.eval_temp
         print(f"Current unit weight: {unit_w}, temperature: {tau}")
 
 
@@ -280,7 +246,7 @@ class DualModel(BenchMarkModel):
         self.log("schedule/temperature", tau, prog_bar=True, on_step=False, on_epoch=True)
         try:
             y = self.get_labels(batch)
-            y_hat, g_feat, seg_feat, mc_losses, entropy_loss = self(batch)
+            y_hat, g_feat, seg_feat, mc_losses, _ = self(batch)
             loss = self.compute_loss(y_hat, y)
 
             total_loss = self.function_weight * loss["graph_label"]
@@ -295,19 +261,6 @@ class DualModel(BenchMarkModel):
                     total_mc_loss += m_loss + o_loss
                 loss["total_mc_loss"] = total_mc_loss
                 total_loss += unit_w * total_mc_loss
-
-            # Entropy regularization loss
-            # if self.entropy_weight != 0:
-            #     entropy_sharpness, entropy_diversity = entropy_loss
-            #     entropy_reg = self.entropy_alpha * entropy_sharpness - self.entropy_beta * entropy_diversity
-            #     loss["segment_entropy"] = entropy_reg
-            #     total_loss += self.entropy_weight * entropy_reg
-
-            # # InfoNCE loss for function-specific segments
-            # if self.mutual_weight != 0:
-            #     mutual_loss = self.segment_info_nce(seg_feat, y["graph_label"].float())
-            #     loss["segment_info_nce"] = mutual_loss
-            #     total_loss += self.mutual_weight * mutual_loss
 
             loss["total"] = total_loss
             self.log_metrics(loss, y_hat, y, stage, batch=batch)
